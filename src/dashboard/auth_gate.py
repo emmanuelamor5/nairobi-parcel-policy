@@ -2,11 +2,12 @@
 Firebase Authentication gate for the parcel dashboard.
 
 Parcel actions include compensated resettlement. The map is served only
-when the caller has either completed a second factor or signed in with
-a phone number. Phone sign-in is an SMS one-time code, so the token's
-``sign_in_provider`` is ``phone``. Password-only sessions are still
-rejected. A second factor shows up as ``sign_in_second_factor`` ``totp``
-or ``phone``.
+when the caller has either completed a second factor, signed in with a
+phone number, or completed passwordless email-link sign-in. Phone
+sign-in is an SMS one-time code, so the token's ``sign_in_provider`` is
+``phone``. The dashboard server separately verifies email links and email codes.
+Password-only sessions are still rejected. A second factor shows up as ``sign_in_second_factor``
+``totp`` or ``phone``.
 
 Token signature verification uses Google's Firebase certs. Tests pass a
 decoded claim dict straight into ``mfa_satisfied`` and never call Google.
@@ -28,6 +29,26 @@ def mfa_satisfied(claims: dict) -> bool:
     if firebase.get("sign_in_second_factor") in SECOND_FACTORS:
         return True
     return firebase.get("sign_in_provider") == "phone"
+
+
+def admin_satisfied(claims: dict, admin_emails=None, *, verified_session=False) -> bool:
+    """
+    True when a caller has completed MFA and holds System Administrator
+    authorization via an ``admin`` / ``role`` claim or an allowed email.
+    """
+    if not verified_session and not mfa_satisfied(claims):
+        return False
+    if claims.get("admin") is True or str(claims.get("role") or "").lower() == "admin":
+        return True
+    firebase = claims.get("firebase")
+    if isinstance(firebase, dict) and str(firebase.get("role") or "").lower() == "admin":
+        return True
+    if admin_emails:
+        allowed = {str(item).strip().lower() for item in admin_emails if str(item).strip()}
+        email = str(claims.get("email") or "").strip().lower()
+        if claims.get("email_verified") is True and email in allowed:
+            return True
+    return False
 
 
 def verify_firebase_id_token(token: str, project_id: str) -> dict:

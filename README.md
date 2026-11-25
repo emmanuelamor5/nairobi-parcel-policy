@@ -103,16 +103,19 @@ v1 baseline and a v2 improvement pass.
   resettlements). River-corridor lift was 0.929, so the exit bar was
   not met. That figure is the fallback, not the 37-zone test.
 
-**Sprint 6: XAI dashboard** — implemented. The Folium map is served only
-after Firebase email/password sign-in plus a TOTP or phone second factor.
-`GraphSAGEModel.explain` returns exact local Shapley values for one
-building. `AttentionUNetModel.explain` returns a Grad-CAM map from the
-last decoder convolution. The signed-in page follows the supplied wireframes: a choropleth map
-with a parcel card, and an XAI summary with SHAP bars, feature values,
-and a prediction path. See
-`notebooks/06_sprint6_dashboard.ipynb`. The Sprint 5 river-corridor lift
-(0.929) is printed on the map page so the actions are not presented as
-a validated flood-hazard layer.
+**Sprint 6: XAI dashboard** ? the signed-in Folium app includes the
+choropleth, policy notices and layers, parcel details, XAI summary, model
+configuration views, profile, and authorized administrator console. The
+Sprint 5 river-corridor lift (0.929) is shown on the map. Validation against
+the 37 official NRRP zones is pending.
+
+Enable the providers you plan to use in Firebase Authentication and add
+the dashboard hostname under Authorized domains. Email links require
+both Email/Password and Email link sign-in, and the dashboard server must
+be able to call the Identity Toolkit API using the configured API key.
+Accounts with enrolled Firebase MFA should use their password or OAuth
+sign-in method to complete that challenge. Account changes such as
+updating a phone number require a Firebase browser session.
 
 The Sprint 6 notebook checks out `main` and reads this layout after mounting
 Google Drive in Colab:
