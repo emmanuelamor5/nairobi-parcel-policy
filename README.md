@@ -114,6 +114,28 @@ and a prediction path. See
 (0.929) is printed on the map page so the actions are not presented as
 a validated flood-hazard layer.
 
+The Sprint 6 notebook checks out `main` and reads this layout after mounting
+Google Drive in Colab:
+
+```text
+MyDrive/nairobi_risk_mapping/
+  policy_table.npz
+  data/graphs/
+    kibera_graph.pt
+    mathare_graph.pt
+    mukuru_graph.pt
+```
+
+For a local run, provide the table and graph folder explicitly:
+
+```bash
+python -m src.dashboard.app --table data/policy_table.npz --graphs data/graphs
+```
+
+Configure `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, and
+`FIREBASE_PROJECT_ID` in the environment or in Colab Secrets. The Colab
+notebook joins the Drive inputs before the optional public preview cell.
+
 ## Repo structure
 
 ```
