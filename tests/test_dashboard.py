@@ -52,90 +52,68 @@ def test_mfa_claim_requires_a_second_factor():
     assert not mfa_satisfied({"firebase": {"sign_in_provider": "emailLink"}})
 
 
-def test_email_link_sign_in_is_bound_to_the_inbox(monkeypatch):
-    from src.dashboard.app import consume_email_link_nonce, issue_email_link_nonce
-
-    nonce = issue_email_link_nonce("Planner@Example.com", now=1_000.0)
-    assert consume_email_link_nonce(nonce, "other@example.com", now=1_010.0)[0] is False
-    assert consume_email_link_nonce(nonce, "planner@example.com", now=1_000.0 + 3601)[0] is False
-    fresh = issue_email_link_nonce("planner@example.com", now=2_000.0)
-    assert consume_email_link_nonce(fresh, "planner@example.com", now=2_100.0)[0] is True
-    assert consume_email_link_nonce(fresh, "planner@example.com", now=2_101.0)[0] is False
-
+def test_email_link_requires_phone_enrollment_before_opening_the_map(monkeypatch):
     html = render_shell({}, ["kibera"])
-    assert "sendSignInLinkToEmail" in html
+    assert "signInWithEmailLink(auth, email, href)" in html
+    assert "startPhoneEnrollment(credential.user, true)" in html
+    assert "auth/multi-factor-auth-required" in html
     assert "isSignInWithEmailLink" in html
-    assert "ActionCodeURL.parseLink" in html
-    assert 'localStorage.setItem(EMAIL_FOR_SIGN_IN, email)' in html or "emailForSignIn" in html
+    assert 'localStorage.setItem(EMAIL_FOR_SIGN_IN, email)' in html
     assert "handleCodeInApp: true" in html
     assert 'searchParams.set("email"' not in html
-    assert "Email me a sign-in link" in html
+    assert "Apple sign-in is disabled in Firebase" in html
 
     def verifier(token):
-        if token == "link-user":
-            return {
-                "user_id": "uid-1",
-                "email": "planner@example.com",
-                "email_verified": True,
-                "firebase": {"sign_in_provider": "password"},
-            }
-        raise ValueError("rejected")
-
-    def redeem(email, code, key):
-        assert email == "planner@example.com"
-        assert key == "test"
-        if code != "verified-firebase-code":
-            raise ValueError("Firebase rejected the sign-in link.")
-        return "link-user"
-
-    monkeypatch.setattr("src.dashboard.app.redeem_firebase_email_link", redeem)
-
-    handler = make_handler(_records(), {"apiKey": "test"}, "t", verifier=verifier)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-
-    def post(path, payload, token=""):
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        request = Request(base + path, data=json.dumps(payload).encode(), headers=headers, method="POST")
-        try:
-            response = urlopen(request)
-            return response.status, json.loads(response.read().decode())
-        except HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode() or "{}")
-
-    try:
-        status, body = post("/api/email-code", {"action": "email-link-start", "email": "not-an-email"})
-        assert status == 400
-        status, body = post("/api/email-code", {"action": "email-link-start", "email": "planner@example.com"})
-        assert status == 200 and body["nonce"]
-        nonce = body["nonce"]
-        status, body = post(
-            "/api/email-code",
-            {"action": "email-link-complete", "nonce": nonce, "email": "planner@example.com"},
-            token="link-user",
-        )
-        assert status == 403
-        _, body = post("/api/email-code", {"action": "email-link-start", "email": "planner@example.com"})
-        nonce = body["nonce"]
-        confirmation = {
-            "action": "email-link-complete", "nonce": nonce, "email": "planner@example.com",
-            "oobCode": "verified-firebase-code",
+        if token not in {"link-user", "enrolled", "other-user", "unverified"}:
+            raise ValueError("rejected")
+        return {
+            "user_id": "another-uid" if token == "other-user" else "uid-1",
+            "email": "planner@example.com",
+            "email_verified": token != "unverified",
+            "firebase": {"sign_in_provider": "password"},
         }
-        status, body = post("/api/email-code", confirmation)
-        assert status == 200 and body["session_token"]
-        session = body["session_token"]
-        parcels = urlopen(Request(base + "/api/parcels", headers={"Authorization": f"Bearer {session}"}))
-        assert parcels.status == 200
-        status, replay = post("/api/email-code", confirmation)
-        assert status == 400
-        assert replay["ok"] is False
-    finally:
-        server.shutdown()
-        server.server_close()
+
+    def finalize(token, verification, code, key):
+        assert token == "link-user" and key == "test"
+        if code != "123456":
+            raise ValueError("Firebase rejected the SMS code.")
+        return "other-user" if verification == "wrong-account" else "enrolled"
+
+    monkeypatch.setattr("src.dashboard.app.finalize_firebase_phone_enrollment", finalize)
+    with serve(_records(), port=0, web_config={"apiKey": "test"}, verifier=verifier) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        root = f"http://127.0.0.1:{server.server_port}"
+
+        def post(action, token, **data):
+            request = Request(root + "/api/email-code", data=json.dumps({"action": action, **data}).encode(),
+                              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            try:
+                with urlopen(request, timeout=5) as response:
+                    return response.status, json.load(response)
+            except HTTPError as exc:
+                return exc.code, json.load(exc)
+
+        def parcels(token):
+            return urlopen(Request(root + "/api/parcels", headers={"Authorization": f"Bearer {token}"}), timeout=5)
+
+        try:
+            with pytest.raises(HTTPError) as before:
+                parcels("link-user")
+            assert before.value.code == 403
+            assert post("email-link-complete", "link-user")[0] == 400
+            assert post("send", "link-user")[0] == 403
+            assert post("phone-enrollment", "unverified", verificationId="sms-session", code="123456")[0] == 403
+            assert post("phone-enrollment", "link-user", verificationId="sms-session", code="")[0] == 400
+            assert post("phone-enrollment", "link-user", verificationId="sms-session", code="000000")[0] == 403
+            assert post("phone-enrollment", "link-user", verificationId="wrong-account", code="123456")[0] == 403
+            status, body = post("phone-enrollment", "link-user", verificationId="sms-session", code="123456")
+            assert status == 200
+            with parcels(body["session_token"]) as response:
+                assert response.status == 200
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 def test_exact_shapley_sums_to_the_prediction_gap():
@@ -450,7 +428,9 @@ def test_planner_explanation_translates_relative_inputs_and_explains_policy_conf
     assert "Screening indicators" in report["signal_note"]
 
 
-def test_parcel_report_download_requires_verified_session_and_returns_pdf():
+def test_parcel_report_download_requires_verified_session_and_returns_pdf(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_GRADCAM_DIR", str(tmp_path))
+    monkeypatch.setenv("DASHBOARD_LOCATOR_DIR", str(tmp_path / "no-locator"))
     records = _records()
     records["features"] = np.ones((2, 5))
     records["attributions"] = np.array([[0.1, -0.4, 0.2, 0.0, np.nan]])
@@ -491,6 +471,30 @@ def test_parcel_report_download_requires_verified_session_and_returns_pdf():
         finally:
             server.shutdown()
             thread.join()
+
+
+def test_parcel_locator_uses_an_unambiguous_saved_footprint(tmp_path, monkeypatch):
+    from PIL import Image
+    from shapely.geometry import Point
+
+    from src.dashboard import parcel_locator
+
+    monkeypatch.setenv("DASHBOARD_LOCATOR_DIR", str(tmp_path))
+    file = tmp_path / "kibera_open_buildings.geojson"
+    feature = {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[
+        [36.79, -1.31], [36.791, -1.31], [36.791, -1.309], [36.79, -1.309], [36.79, -1.31],
+    ]]}}
+    file.write_text(json.dumps({"type": "FeatureCollection", "features": [feature]}))
+    monkeypatch.setattr(parcel_locator, "_read_locator_photo", lambda path, bbox: Image.new("RGB", (164, 164)))
+    parcel = {"settlement": "kibera", "lon": 36.7905, "lat": -1.3095}
+    locator = parcel_locator.load_parcel_locator(parcel)
+    assert locator.photo.size == (164, 164)
+    assert locator.outline.covers(Point(*locator.point))
+    assert locator.footprint_source == "Google Open Buildings"
+    assert locator.extent[1] - locator.extent[0] == 130
+    assert parcel_locator.load_parcel_locator({**parcel, "lon": 36.792}).outline is None
+    file.write_text(json.dumps({"type": "FeatureCollection", "features": [feature, feature]}))
+    assert parcel_locator.load_parcel_locator(parcel).outline is None
 
 
 def test_parcel_attention_centres_the_satellite_and_gradcam_crop(tmp_path, monkeypatch):

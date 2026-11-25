@@ -111,11 +111,12 @@ the 37 official NRRP zones is pending.
 
 Enable the providers you plan to use in Firebase Authentication and add
 the dashboard hostname under Authorized domains. Email links require
-both Email/Password and Email link sign-in, and the dashboard server must
-be able to call the Identity Toolkit API using the configured API key.
-Accounts with enrolled Firebase MFA should use their password or OAuth
-sign-in method to complete that challenge. Account changes such as
-updating a phone number require a Firebase browser session.
+Email/Password, Email link sign-in, and Firebase SMS multi-factor
+authentication (Identity Platform). After opening a link, users complete
+their enrolled factor or verify a phone over SMS. The server must be able
+to call Identity Toolkit to verify phone enrollment. Apple sign-in
+requires enabling the Apple provider and configuring its Apple Developer
+credentials in Firebase.
 
 The Sprint 6 notebook checks out `main` and reads this layout after mounting
 Google Drive in Colab:
@@ -147,6 +148,14 @@ Sprint 4 trained `attention_unet_best.pt` and each settlement's
 `<settlement>_raster_stack.tif` in `data/drive_dashboard/gradcam/`.
 Set `DASHBOARD_GRADCAM_DIR` to use another folder. The report identifies
 when imagery or a compatible flood checkpoint is unavailable.
+
+The PDF also supports a separate parcel locator. Put RGB Esri World
+Imagery GeoTIFFs in EPSG:3857 named `<settlement>_locator_imagery.tif`
+in `data/drive_dashboard/footprints/`, or set `DASHBOARD_LOCATOR_DIR`
+to a different directory. The report crops these settlement mosaics
+locally. A WGS84 building layer named `<settlement>_osm_buildings.geojson`
+or `<settlement>_open_buildings.geojson` supplies the outline when one
+footprint covers the saved parcel point. The report credits its sources.
 
 ## Repo structure
 

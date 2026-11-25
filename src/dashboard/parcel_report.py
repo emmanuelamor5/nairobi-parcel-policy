@@ -10,6 +10,7 @@ from matplotlib.patches import FancyBboxPatch, Rectangle
 from matplotlib import colormaps
 
 from .parcel_attention import load_parcel_attention
+from .parcel_locator import load_parcel_locator
 
 from .planner_explanation import planner_explanation
 
@@ -49,14 +50,14 @@ def _box(fig, x, top, width, height, *, color="white", edge=None):
                                   edgecolor=edge or color, linewidth=.7, zorder=-1))
 
 
-def _page(parcel, page, title, subtitle):
+def _page(parcel, page, title, subtitle, *, pages=2):
     fig = Figure(figsize=(8.27, 11.69), facecolor=PAPER)
     _box(fig, .046, .959, .908, .139, color="#173c3a")
     _text(fig, .078, .932, "NAIROBI RISK MAPPING", size=9, color="#aee1cc", weight="bold")
     _text(fig, .078, .903, title, size=26, color="white", weight="bold")
     _text(fig, .079, .852, subtitle, size=10, color="#e4f3ed")
     _text(fig, .069, .043, f"Planning screening  |  {parcel['id']}", size=8, color=MUTED)
-    _text(fig, .884, .043, f"{page} / 2", size=8, color=MUTED, weight="bold")
+    _text(fig, .884, .043, f"{page} / {pages}", size=8, color=MUTED, weight="bold")
     return fig
 
 
@@ -95,9 +96,9 @@ def _image_panel(fig, attention):
     _text(fig, .07, .075, "Grad-CAM explains a new run on the local tile. Verify flood conditions independently.", size=8, color=MUTED)
 
 
-def _decision_page(parcel, action, guidance, planning, attention):
+def _decision_page(parcel, action, guidance, planning, attention, *, pages=2):
     place = parcel.get("settlement", "").title() or "Settlement unavailable"
-    fig = _page(parcel, 1, "Parcel planning brief", f"{place}  |  Parcel {parcel['id']}")
+    fig = _page(parcel, 1, "Parcel planning brief", f"{place}  |  Parcel {parcel['id']}", pages=pages)
     _box(fig, .07, .801, .86, .129, color="#e5f1ea")
     _text(fig, .092, .781, "SUGGESTED POLICY ACTION", size=9, color=GREEN, weight="bold")
     _text(fig, .092, .751, action, size=19, weight="bold")
@@ -120,8 +121,8 @@ def _decision_page(parcel, action, guidance, planning, attention):
     return fig
 
 
-def _evidence_page(parcel, planning, lift_note):
-    fig = _page(parcel, 2, "Evidence for field review", "Building indicators, interpretation and verification")
+def _evidence_page(parcel, planning, lift_note, *, pages=2):
+    fig = _page(parcel, 2, "Evidence for field review", "Building indicators, interpretation and verification", pages=pages)
     _text(fig, .07, .794, "How the building indicators were used", size=13, color=GREEN, weight="bold")
     y = _text(fig, .07, .762, planning["model_note"] + " " + planning["deprivation_result"], size=9, width=105) - .014
     y = _text(fig, .07, y, planning["input_note"], size=8, color=MUTED, width=114) - .014
@@ -152,13 +153,59 @@ def _evidence_page(parcel, planning, lift_note):
     return fig
 
 
+def _locator_page(parcel, locator):
+    fig = _page(parcel, 3, "Parcel locator", "Detailed satellite context  |  North up", pages=3)
+    ax = fig.add_axes([.07, .167, .86, .608])
+    ax.set_facecolor("#e7eeec")
+    if locator.photo is not None:
+        ax.imshow(locator.photo, extent=locator.extent, interpolation="none")
+    else:
+        ax.text(.5, .95, "Detailed satellite imagery unavailable", transform=ax.transAxes,
+                ha="center", va="top", color=MUTED, fontsize=10)
+    if locator.outline is not None:
+        outline = locator.outline
+        polygons = outline.geoms if outline.geom_type == "MultiPolygon" else (outline,)
+        for polygon in polygons:
+            for ring in (polygon.exterior, *polygon.interiors):
+                xs, ys = ring.xy
+                ax.plot(xs, ys, color="#162f35", linewidth=4)
+                ax.plot(xs, ys, color="#ffda4f", linewidth=2.1)
+    ax.scatter(*locator.point, marker="+", color="#fff", linewidths=2.5, s=110, zorder=3)
+    ax.scatter(*locator.point, marker="+", color="#142b33", linewidths=1.1, s=100, zorder=4)
+    x0, x1, y0, y1 = locator.extent
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    ax.set_aspect("equal")
+    ax.set_axis_off()
+    scale_x, scale_y = x0 + 8, y0 + 9
+    ax.plot([scale_x, scale_x + 25], [scale_y, scale_y], color="#142b33", linewidth=4)
+    ax.plot([scale_x, scale_x + 25], [scale_y, scale_y], color="white", linewidth=2)
+    ax.text(scale_x + 12.5, scale_y + 3, "25 m", ha="center", fontsize=8,
+            bbox={"facecolor": "#142b33", "edgecolor": "none", "pad": 2}, color="white")
+    if locator.footprint_source:
+        marker_note = f"Yellow outline: {locator.footprint_source} building footprint containing the saved parcel point."
+    else:
+        marker_note = "Crosshair: saved parcel point. A unique matching building footprint is unavailable."
+    y = _text(fig, .07, .150, marker_note, size=9, weight="bold", width=105) - .008
+    y = _text(fig, .07, y, "Use this page to locate the site during field checks. Verify the mapped location and legal boundaries locally.",
+              size=8, color=MUTED, width=110) - .005
+    if locator.photo is not None:
+        _text(fig, .07, y, "Imagery: Esri World Imagery, Vantor, Earthstar Geographics and the GIS User Community.",
+              size=8, color=MUTED, width=110)
+    return fig
+
+
 def build_parcel_pdf(parcel: dict, lift_note: str) -> bytes:
     """Make the decision brief and field review pages for the selected parcel."""
     action, guidance = ACTION_GUIDANCE.get(parcel["action"], ACTION_GUIDANCE["insufficient_evidence"])
     planning = parcel.get("planning") or planner_explanation(parcel)
     attention = load_parcel_attention(parcel)
+    locator = load_parcel_locator(parcel)
+    pages = 3 if locator is not None else 2
     with BytesIO() as output:
         with PdfPages(output, metadata={"Title": f"Parcel planning report - {parcel['id']}"}) as report:
-            report.savefig(_decision_page(parcel, action, guidance, planning, attention))
-            report.savefig(_evidence_page(parcel, planning, lift_note))
+            report.savefig(_decision_page(parcel, action, guidance, planning, attention, pages=pages))
+            report.savefig(_evidence_page(parcel, planning, lift_note, pages=pages))
+            if locator is not None:
+                report.savefig(_locator_page(parcel, locator))
         return output.getvalue()

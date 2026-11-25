@@ -1,13 +1,10 @@
 """
 Firebase Authentication gate for the parcel dashboard.
 
-Parcel actions include compensated resettlement. The map is served only
-when the caller has either completed a second factor, signed in with a
-phone number, or completed passwordless email-link sign-in. Phone
-sign-in is an SMS one-time code, so the token's ``sign_in_provider`` is
-``phone``. The dashboard server separately verifies email links and email codes.
-Password-only sessions are still rejected. A second factor shows up as ``sign_in_second_factor``
-``totp`` or ``phone``.
+Parcel actions include compensated resettlement. The map requires a
+completed second factor or Firebase phone sign-in. Email-link sign-in
+also needs a second factor. The dashboard server verifies phone enrollment
+and email codes before issuing a dashboard session.
 
 Token signature verification uses Google's Firebase certs. Tests pass a
 decoded claim dict straight into ``mfa_satisfied`` and never call Google.

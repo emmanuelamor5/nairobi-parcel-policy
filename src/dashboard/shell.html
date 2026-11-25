@@ -724,7 +724,7 @@
           </div>
           <button class="auth-pill auth-continue" id="email-continue" type="button" disabled>Use a password instead</button>
         </form>
-        <p class="auth-note">A sign-in link proves this inbox. Password sign-in still needs a second factor.</p>
+        <p class="auth-note">After opening the email link, complete phone verification or use your enrolled second factor.</p>
       </div>
       <form id="email-link" class="auth-stack" hidden>
         <button class="auth-back" id="email-link-back" type="button">All sign-in options</button>
@@ -757,6 +757,7 @@
         <button class="auth-back" id="challenge-back" type="button">All sign-in options</button>
         <p id="challenge-copy">Enter the code from the text message.</p>
         <div id="challenge-recaptcha"></div>
+        <button class="auth-pill" id="challenge-resend" type="button" hidden>Send a new code</button>
         <fieldset class="code-entry" id="otp-entry" hidden disabled>
           <label for="otp">Text message code</label>
           <div class="private-field">
@@ -768,7 +769,7 @@
       </form>
       <form id="enroll" class="auth-stack" hidden>
         <button class="auth-back" id="enroll-back" type="button">All sign-in options</button>
-        <p>This account has no phone second factor. Enter a number in international form, such as +254712345678. After the code is saved, sign in again.</p>
+        <p id="enroll-copy">Enter a number in international form, such as +254712345678. Complete reCAPTCHA to receive a text message code.</p>
         <label for="phone">Phone number</label>
         <input id="phone" type="tel" autocomplete="tel" placeholder="+254712345678" required>
         <div id="enroll-recaptcha"></div>
@@ -779,7 +780,7 @@
             <input id="enroll-code" type="password" inputmode="numeric" autocomplete="one-time-code">
             <button type="button" class="private-toggle" data-visibility-for="enroll-code" aria-controls="enroll-code" aria-label="Show code">Show</button>
           </div>
-          <button class="auth-pill auth-dark" type="submit">Verify and enroll</button>
+          <button class="auth-pill auth-dark" type="submit">Verify phone and sign in</button>
         </fieldset>
       </form>
       <form id="code-choice" class="auth-stack" hidden>
@@ -1498,7 +1499,7 @@
       getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPhoneNumber, signInWithPopup, signOut, multiFactor, updatePhoneNumber,
       TotpMultiFactorGenerator, PhoneAuthProvider, PhoneMultiFactorGenerator,
       RecaptchaVerifier, getMultiFactorResolver, GoogleAuthProvider, OAuthProvider,
-      sendSignInLinkToEmail, isSignInWithEmailLink, ActionCodeURL, sendEmailVerification,
+      sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, sendEmailVerification,
     } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
 
     const liftNote = {{LIFT_NOTE_JSON}};
@@ -1652,11 +1653,10 @@
 
     const EMAIL_FOR_SIGN_IN = "emailForSignIn";
 
-    function emailLinkContinueUrl(nonce) {
+    function emailLinkContinueUrl() {
       const url = new URL(window.location.href);
       url.hash = "";
       url.search = "";
-      url.searchParams.set("emailLinkNonce", nonce);
       return url.toString();
     }
 
@@ -1670,22 +1670,35 @@
     }
 
     async function completeEmailLink(email, href) {
-      const link = ActionCodeURL.parseLink(href);
-      const nonce = new URL(link.continueUrl || href).searchParams.get("emailLinkNonce");
-      const response = await fetch("/api/email-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "email-link-complete", email, nonce, oobCode: link.code }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.session_token) {
-        throw new Error(payload.error || "Could not finish email-link sign-in.");
+      let credential;
+      try {
+        credential = await signInWithEmailLink(auth, email, href);
+      } catch (err) {
+        if (err?.code !== "auth/multi-factor-auth-required") throw err;
+        clearEmailLinkState();
+        await authError(err);
+        return;
       }
+      clearEmailLinkState();
+      startPhoneEnrollment(credential.user, true);
+    }
+
+    function clearEmailLinkState() {
       try { window.localStorage.removeItem(EMAIL_FOR_SIGN_IN); } catch (_err) { /* storage may be blocked */ }
+      const confirmation = document.getElementById("email-link-confirm-input");
+      delete confirmation.dataset.href;
+      confirmation.value = "";
       stripEmailLinkParams();
-      if (auth.currentUser) await signOut(auth);
-      sessionToken = payload.session_token;
-      await enterApp({ uid: payload.uid, email });
+    }
+
+    function startPhoneEnrollment(user, verifiedLink = false) {
+      pendingUser = user;
+      enrollmentVerificationId = null;
+      setCodeEntry("enroll-code", false);
+      const heading = verifiedLink ? "Email verified. " : "";
+      document.getElementById("enroll-copy").textContent = heading + "Enter your phone number with its country code, then complete reCAPTCHA to get an SMS code.";
+      showForm("enroll");
+      document.getElementById("phone").focus();
     }
 
     async function maybeFinishEmailLink() {
@@ -2750,23 +2763,38 @@
       }
     }
 
+    async function sendChallengeCode() {
+      const phoneHint = resolver.hints.find((item) => item.factorId === PhoneMultiFactorGenerator.FACTOR_ID);
+      if (!phoneHint) return;
+      const retry = document.getElementById("challenge-resend");
+      const copy = document.getElementById("challenge-copy");
+      const shownPhone = phoneHint.phoneNumber || "your phone";
+      challengeVerificationId = null;
+      setCodeEntry("otp", false);
+      retry.hidden = true;
+      copy.textContent = "Complete reCAPTCHA to text a code to " + shownPhone + ".";
+      try {
+        challengeVerificationId = await sendSms("challenge-recaptcha", (verifier) =>
+          new PhoneAuthProvider(auth).verifyPhoneNumber({ multiFactorHint: phoneHint, session: resolver.session }, verifier));
+        copy.textContent = "Enter the code texted to " + shownPhone + ".";
+        setCodeEntry("otp", true);
+      } finally {
+        retry.hidden = false;
+      }
+    }
+
     async function beginChallenge(err) {
       resolver = getMultiFactorResolver(auth, err);
-      const phoneHint = resolver.hints.find((item) => item.factorId === PhoneMultiFactorGenerator.FACTOR_ID);
       showForm("challenge");
       challengeVerificationId = null;
       setCodeEntry("otp", false);
-      if (phoneHint) {
+      if (resolver.hints.some((item) => item.factorId === PhoneMultiFactorGenerator.FACTOR_ID)) {
         challengeKind = "phone";
-        const shownPhone = phoneHint.phoneNumber || "your phone";
-        document.getElementById("challenge-copy").textContent = "Complete reCAPTCHA to text a code to " + shownPhone + ".";
-        challengeVerificationId = await sendSms("challenge-recaptcha", (verifier) =>
-          new PhoneAuthProvider(auth).verifyPhoneNumber({ multiFactorHint: phoneHint, session: resolver.session }, verifier));
-        document.getElementById("challenge-copy").textContent = "Enter the code texted to " + shownPhone + ".";
-        setCodeEntry("otp", true);
+        await sendChallengeCode();
         return;
       }
       challengeKind = "totp";
+      document.getElementById("challenge-resend").hidden = true;
       document.getElementById("challenge-copy").textContent = "Enter the code from your authenticator app.";
       setCodeEntry("otp", true);
     }
@@ -2811,6 +2839,16 @@
       const firebaseClaims = (tokenResult.claims && tokenResult.claims.firebase) || {};
       if (firebaseClaims.sign_in_provider === "phone" || firebaseClaims.sign_in_second_factor) {
         await enterApp(cred.user);
+        return;
+      }
+      if (firebaseClaims.sign_in_provider === "password") {
+        if (cred.user.emailVerified) {
+          startPhoneEnrollment(cred.user);
+        } else {
+          await sendEmailVerification(cred.user);
+          await signOut(auth);
+          errorEl.textContent = "Check your inbox to verify this email, then sign in again.";
+        }
         return;
       }
       pendingUser = cred.user;
@@ -2933,7 +2971,7 @@
         document.getElementById("code-error").textContent = publicAuthError(err);
       }
     }));
-    document.getElementById("choose-phone-code").addEventListener("click", () => showForm("enroll"));
+    document.getElementById("choose-phone-code").addEventListener("click", () => startPhoneEnrollment(pendingUser));
     document.getElementById("resend-login-code").addEventListener("click", () => runBusy(document.getElementById("resend-login-code"), async () => {
       document.getElementById("code-error").textContent = "";
       try {
@@ -2977,18 +3015,8 @@
       const email = document.getElementById("email").value.trim();
       if (!email) return;
       try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
-      const start = await fetch("/api/email-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "email-link-start", email }),
-      });
-      const started = await start.json().catch(() => ({}));
-      if (!start.ok || !started.nonce) {
-        errorEl.textContent = started.error || "Could not start email-link sign-in.";
-        return;
-      }
       const actionCodeSettings = {
-        url: emailLinkContinueUrl(started.nonce),
+        url: emailLinkContinueUrl(),
         handleCodeInApp: true,
       };
       try {
@@ -3067,7 +3095,22 @@
         apple.addScope("name");
         await signedIn(await signInWithPopup(auth, apple));
       } catch (err) {
-        await authError(err);
+        if (err?.code === "auth/operation-not-allowed") {
+          errorEl.textContent = "Apple sign-in is disabled in Firebase. Enable the Apple provider and configure its Apple Developer credentials.";
+        } else if (err?.code === "auth/invalid-oauth-client-id") {
+          errorEl.textContent = "Firebase rejected the Apple OAuth configuration. Check the Apple Services ID and callback URL.";
+        } else {
+          await authError(err);
+        }
+      }
+    }));
+
+    document.getElementById("challenge-resend").addEventListener("click", () => runBusy(document.getElementById("challenge-resend"), async () => {
+      errorEl.textContent = "";
+      try {
+        await sendChallengeCode();
+      } catch (err) {
+        errorEl.textContent = publicAuthError(err);
       }
     }));
 
@@ -3098,8 +3141,10 @@
       enrollmentVerificationId = null;
       setCodeEntry("enroll-code", false);
       try {
-        const session = await multiFactor(auth.currentUser).getSession();
+        if (!pendingUser || pendingUser !== auth.currentUser) throw new Error("Sign in again before verifying your phone.");
         const phoneNumber = document.getElementById("phone").value.trim();
+        if (!phoneNumber) throw new Error("Enter your phone number first.");
+        const session = await multiFactor(pendingUser).getSession();
         enrollmentVerificationId = await sendSms("enroll-recaptcha", (verifier) =>
           new PhoneAuthProvider(auth).verifyPhoneNumber({ phoneNumber, session }, verifier));
         setCodeEntry("enroll-code", true);
@@ -3114,12 +3159,24 @@
       return runBusy(event.submitter, async () => {
         errorEl.textContent = "";
         try {
-          if (!enrollmentVerificationId) return;
-          const credential = PhoneAuthProvider.credential(enrollmentVerificationId, document.getElementById("enroll-code").value.trim());
-          await multiFactor(auth.currentUser).enroll(PhoneMultiFactorGenerator.assertion(credential), "Phone");
-          await signOut(auth);
-          showForm("sign-in");
-          errorEl.textContent = "Phone enrolled. Sign in again and enter the new text message code.";
+          if (!enrollmentVerificationId || !pendingUser || pendingUser !== auth.currentUser) return;
+          const token = await pendingUser.getIdToken();
+          const response = await fetch("/api/email-code", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "phone-enrollment", verificationId: enrollmentVerificationId,
+              code: document.getElementById("enroll-code").value.trim(),
+            }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.session_token) throw new Error(payload.error || "Could not verify your phone.");
+          const user = pendingUser;
+          sessionToken = payload.session_token;
+          pendingUser = null;
+          enrollmentVerificationId = null;
+          setCodeEntry("enroll-code", false);
+          await enterApp(user);
         } catch (err) {
           errorEl.textContent = publicAuthError(err);
         }

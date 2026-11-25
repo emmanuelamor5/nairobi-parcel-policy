@@ -24,6 +24,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .auth_gate import admin_satisfied, bearer_token, mfa_satisfied, verify_firebase_id_token
@@ -132,9 +133,7 @@ def _serve_asset(handler, url_path: str) -> None:
 
 
 _EMAIL_CODES = {}
-_EMAIL_LINK_NONCES = {}
 EMAIL_CODE_SECONDS = 300
-EMAIL_LINK_SECONDS = 3600
 VERIFIED_SESSION_SECONDS = 12 * 3600
 _VERIFIED_TOKENS = {}
 _ADMIN_SESSIONS = {}
@@ -216,63 +215,30 @@ def _clean_email(email: str) -> str:
     return clean
 
 
-def issue_email_link_nonce(email: str, now: float = None) -> str:
-    """
-    Bind a one-time nonce to ``email`` before Firebase sends the sign-in link.
-
-    The nonce goes in the continue URL. The email address does not, so a
-    copied link cannot choose a different account.
-    """
-    moment = time.time() if now is None else now
-    clean = _clean_email(email)
-    if not clean:
-        raise ValueError("Enter a valid email address.")
-    nonce = secrets.token_urlsafe(24)
-    with _AUTH_LOCK:
-        for key, row in list(_EMAIL_LINK_NONCES.items()):
-            if moment > row["exp"]:
-                del _EMAIL_LINK_NONCES[key]
-        _EMAIL_LINK_NONCES[nonce] = {"email": clean, "exp": moment + EMAIL_LINK_SECONDS}
-    return nonce
-
-
-def consume_email_link_nonce(nonce: str, email: str, now: float = None):
-    """Return (ok, message). The nonce matches one email and cannot be reused."""
-    moment = time.time() if now is None else now
-    key = str(nonce or "").strip()
-    with _AUTH_LOCK:
-        row = _EMAIL_LINK_NONCES.get(key)
-        if not row:
-            return False, "Request a new sign-in link."
-        if moment > row["exp"]:
-            del _EMAIL_LINK_NONCES[key]
-            return False, "That sign-in link expired. Request a new one."
-        if _clean_email(email) != row["email"]:
-            return False, "That email does not match the sign-in link."
-        del _EMAIL_LINK_NONCES[key]
-    return True, ""
-
-
-def redeem_firebase_email_link(email: str, code: str, api_key: str) -> str:
-    """Redeem the one-time code with Firebase and return its signed ID token."""
-    if not code or not api_key:
-        raise ValueError("A Firebase sign-in link is required.")
+def finalize_firebase_phone_enrollment(id_token: str, session: str, code: str, api_key: str) -> str:
+    """Return Firebase's signed token only after it accepts the enrollment SMS code."""
+    if not api_key:
+        raise ValueError("The dashboard server is missing its Firebase web API key.")
     request = urllib.request.Request(
-        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?"
+        "https://identitytoolkit.googleapis.com/v2/accounts:mfaEnrollment:finalize?"
         + urlencode({"key": api_key}),
-        data=json.dumps({"email": email, "oobCode": code}).encode(),
+        data=json.dumps({
+            "idToken": id_token,
+            "displayName": "Phone",
+            "phoneVerificationInfo": {"sessionInfo": session, "code": code},
+        }).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             result = json.load(response)
+    except HTTPError as exc:
+        raise ValueError("Firebase could not verify the code. Check the code or request a new one.") from exc
     except (OSError, ValueError) as exc:
-        raise ValueError("Firebase rejected the sign-in link. Request a new one.") from exc
-    if result.get("mfaPendingCredential"):
-        raise ValueError("This account requires Firebase MFA. Use a sign-in method that prompts for it.")
-    if not result.get("idToken"):
-        raise ValueError("Firebase did not return a verified sign-in session.")
+        raise ValueError("Could not reach Firebase to finish phone verification. Try again.") from exc
+    if not isinstance(result.get("idToken"), str) or not result["idToken"]:
+        raise ValueError("Firebase did not confirm the phone enrollment.")
     return result["idToken"]
 
 
@@ -795,41 +761,13 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 _json_response(self, 200, result)
                 return
             action = body.get("action")
-            if action == "email-link-start":
-                try:
-                    nonce = issue_email_link_nonce(str(body.get("email") or ""))
-                except ValueError as exc:
-                    _json_response(self, 400, {"ok": False, "error": str(exc)})
-                    return
-                _json_response(self, 200, {"ok": True, "nonce": nonce, "expires_in": EMAIL_LINK_SECONDS})
-                return
-            if action == "email-link-complete":
-                email = _clean_email(body.get("email"))
-                ok, message = consume_email_link_nonce(body.get("nonce"), email)
-                if not ok:
-                    _json_response(self, 400, {"ok": False, "error": message})
-                    return
-                try:
-                    firebase_token = redeem_firebase_email_link(
-                        email, str(body.get("oobCode") or ""), auth_config.get("apiKey", ""),
-                    )
-                    claims = verifier(firebase_token)
-                    if claims.get("email_verified") is not True or _clean_email(claims.get("email")) != email:
-                        raise ValueError("Firebase could not verify the sign-in email.")
-                except ValueError as exc:
-                    _json_response(self, 403, {"ok": False, "error": str(exc)})
-                    return
-                session = issue_verified_token(claims, "email_link")
-                _json_response(self, 200, {"ok": True, "session_token": session,
-                                          "uid": claims.get("user_id") or claims.get("sub")})
-                return
             if action == "sign-out":
                 token = self._token()
                 _VERIFIED_TOKENS.pop(token, None)
                 _ADMIN_SESSIONS.pop(token, None)
                 _json_response(self, 200, {"ok": True})
                 return
-            if action not in {"send", "check"}:
+            if action not in {"send", "check", "phone-enrollment"}:
                 _json_response(self, 400, {"ok": False, "error": "Unknown action."})
                 return
             claims = self._identity()
@@ -838,9 +776,37 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
             uid = claims.get("user_id") or claims.get("sub")
             email = _clean_email(claims.get("email"))
             if not uid or not email or claims.get("email_verified") is not True:
-                _json_response(self, 403, {"ok": False, "error": "Verify your Firebase email before requesting a code."})
+                _json_response(self, 403, {"ok": False, "error": "Verify your Firebase email to continue."})
                 return
             token = self._token()
+            if action == "phone-enrollment":
+                verification = body.get("verificationId")
+                code = body.get("code")
+                if not isinstance(verification, str) or not verification or not isinstance(code, str) or not (
+                    len(code) == 6 and code.isascii() and code.isdigit()
+                ):
+                    _json_response(self, 400, {"ok": False, "error": "Enter the six-digit code Firebase texted you."})
+                    return
+                try:
+                    firebase_token = finalize_firebase_phone_enrollment(
+                        token, verification, code, auth_config.get("apiKey", ""),
+                    )
+                    verified_claims = verifier(firebase_token)
+                    verified_uid = verified_claims.get("user_id") or verified_claims.get("sub")
+                    if verified_uid != uid or verified_claims.get("email_verified") is not True:
+                        raise ValueError("Firebase did not confirm enrollment for this account.")
+                except ValueError as exc:
+                    _json_response(self, 403, {"ok": False, "error": str(exc)})
+                    return
+                session = issue_verified_token(verified_claims, "phone_enrollment")
+                _json_response(self, 200, {"ok": True, "session_token": session})
+                return
+            firebase = claims.get("firebase", {})
+            # Firebase identifies password and email-link sign-ins with the same provider.
+            # An inbox code cannot be the second factor for an email-link sign-in.
+            if firebase.get("sign_in_provider") == "password":
+                _json_response(self, 403, {"ok": False, "error": "Verify a phone number to finish this sign-in."})
+                return
             if action == "send":
                 try:
                     code = issue_email_code(uid, session=token)
