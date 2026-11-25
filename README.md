@@ -138,6 +138,9 @@ python -m src.dashboard.app --table data/policy_table.npz --graphs data/graphs
 Configure `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, and
 `FIREBASE_PROJECT_ID` in the environment or in Colab Secrets. The Colab
 notebook joins the Drive inputs before the optional public preview cell.
+The preview runs in a separate Python process from the current checkout.
+Restart a Colab runtime that is still running an older preview, then use
+the new HTTPS link printed by the preview cell.
 
 ## Repo structure
 

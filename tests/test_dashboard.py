@@ -310,6 +310,47 @@ def test_shell_renders_without_a_firebase_project():
     assert "kibera" in html
 
 
+def test_auth_config_reports_missing_fields_without_returning_partial_settings():
+    with serve(_records(), port=0, web_config={"apiKey": "fixture-key"}) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/auth/config"
+            try:
+                urlopen(url)
+            except HTTPError as exc:
+                assert exc.code == 503
+                assert json.load(exc) == {"missingFields": ["authDomain", "projectId"]}
+            else:
+                raise AssertionError("An incomplete Firebase configuration should return 503")
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def test_public_preview_cli_keeps_the_server_running_until_interrupted(monkeypatch):
+    from unittest.mock import Mock
+
+    from src.dashboard import app
+
+    records = _records()
+    server = Mock()
+    launch = Mock(return_value=server)
+    wait = Mock()
+    wait.wait.side_effect = KeyboardInterrupt
+    monkeypatch.setattr("sys.argv", ["app", "--public-preview", "--port", "8765"])
+    monkeypatch.setattr(app, "_load_records", lambda *_: records)
+    monkeypatch.setattr(app, "launch", launch)
+    monkeypatch.setattr(app, "Event", lambda: wait)
+
+    app.main()
+
+    launch.assert_called_once_with(records, port=8765)
+    wait.wait.assert_called_once()
+    server.shutdown.assert_called_once()
+    server.server_close.assert_called_once()
+
+
 def test_shell_html_does_not_embed_firebase_api_key():
     from src.dashboard.app import public_firebase_web_config
 

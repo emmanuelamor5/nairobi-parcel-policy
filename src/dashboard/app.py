@@ -23,7 +23,7 @@ import urllib.request
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .auth_gate import admin_satisfied, bearer_token, mfa_satisfied, verify_firebase_id_token
@@ -594,6 +594,7 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
         verifier = partial(verify_firebase_id_token, project_id=project_id)
     shell = render_shell(web_config, records.get("settlement_keys"), lift_note)
     auth_config = public_firebase_web_config(web_config)
+    missing_auth_fields = [name for name in ("apiKey", "authDomain", "projectId") if name not in auth_config]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -654,7 +655,10 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 return
             if parsed.path == "/api/auth/config":
                 # Browser Firebase SDK needs these; keep them out of HTML view-source.
-                _json_response(self, 200, auth_config)
+                if missing_auth_fields:
+                    _json_response(self, 503, {"missingFields": missing_auth_fields})
+                else:
+                    _json_response(self, 200, auth_config)
                 return
             if parsed.path == "/api/admin/status":
                 claims = self._admin_claims()
@@ -838,7 +842,7 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
 def serve(records: dict, host: str = "127.0.0.1", port: int = 8765, verifier=None, web_config: dict = None):
     """Start the dashboard and return the server. Call ``shutdown`` to stop it."""
     config = web_config if web_config is not None else firebase_web_config()
-    project_id = os.environ.get("FIREBASE_PROJECT_ID", "") or config.get("projectId", "")
+    project_id = public_firebase_web_config(config).get("projectId", "")
     handler = make_handler(records, config, project_id, verifier=verifier)
     server = ThreadingHTTPServer((host, port), handler)
     return server
@@ -950,20 +954,27 @@ def main():
     parser.add_argument("--graphs", default=None, help="directory of {settlement}_graph.pt files")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--public-preview", action="store_true", help="keep a Colab HTTPS preview running in this process")
     args = parser.parse_args()
     records = _load_records(args.table, args.graphs)
-    try:
-        import google.colab  # noqa: F401
-        launch(records, port=args.port)
-        print("The server stays up while this Colab runtime is alive.")
-    except ImportError:
-        server = serve(records, host=args.host, port=args.port)
+    if args.public_preview:
+        server = launch(records, port=args.port)
+        try:
+            Event().wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.shutdown()
+            server.server_close()
+        return
+
+    with serve(records, host=args.host, port=args.port) as server:
         print(f"Dashboard at http://{args.host}:{args.port}  parcels={records['positions'].shape[0]}")
-        print("The map is served only after a Firebase authenticator sign-in.")
+        print("The map is served only after Firebase sign-in verification.")
         try:
             server.serve_forever()
         except KeyboardInterrupt:
-            server.shutdown()
+            pass
 
 
 if __name__ == "__main__":

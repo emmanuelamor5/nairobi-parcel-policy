@@ -1483,7 +1483,7 @@
     let outlineSelection = true;
     const errorEl = document.getElementById("gate-error");
     let auth = null;
-    let authReady = null;
+    let authProblem = "";
     let resolver = null;
     let confirmationResult = null;
     let verificationId = null;
@@ -1539,31 +1539,42 @@
     }
 
     async function bootstrapAuth() {
+      const stalePreview = "This preview has an older dashboard server. Restart the Colab runtime and open its new preview URL.";
+      const unavailable = "The dashboard server could not load Firebase settings. Check that the preview cell is still running.";
+      let response;
       try {
-        const response = await fetch("/api/auth/config", { cache: "no-store" });
-        if (!response.ok) throw new Error("config unavailable");
-        const config = await response.json();
-        if (!config || !config.apiKey) {
-          errorEl.textContent = "Firebase web config is not set on the server. The map stays closed.";
-          return null;
-        }
-        auth = getAuth(initializeApp({
-          apiKey: config.apiKey,
-          authDomain: config.authDomain || undefined,
-          projectId: config.projectId || undefined,
-          appId: config.appId || undefined,
-        }));
-        return auth;
+        response = await fetch("/api/auth/config", { cache: "no-store" });
       } catch (_err) {
-        errorEl.textContent = "Firebase web config is not set on the server. The map stays closed.";
-        return null;
+        authProblem = unavailable;
       }
+      if (response) {
+        try {
+          if (response.status === 404) throw new Error(stalePreview);
+          const config = await response.json();
+          if (response.status === 503 && Array.isArray(config?.missingFields)) {
+            const names = { apiKey: "FIREBASE_API_KEY", authDomain: "FIREBASE_AUTH_DOMAIN", projectId: "FIREBASE_PROJECT_ID" };
+            const missing = config.missingFields.map((field) => names[field]).filter(Boolean);
+            if (missing.length) throw new Error("Add these Firebase settings to Colab Secrets and enable notebook access: " + missing.join(", ") + ".");
+          }
+          if (!response.ok || !config || !config.apiKey || !config.authDomain || !config.projectId) throw new Error(unavailable);
+          auth = getAuth(initializeApp(config));
+          authProblem = "";
+          return auth;
+        } catch (err) {
+          authProblem = err instanceof SyntaxError ? unavailable : publicAuthError(err);
+        }
+      }
+      errorEl.textContent = authProblem;
+      return null;
     }
-    authReady = bootstrapAuth();
+
+    let authReady = bootstrapAuth();
 
     async function requireAuth() {
-      await authReady;
-      if (!auth) throw new Error("Sign-in is not available.");
+      if (!await authReady) {
+        authReady = bootstrapAuth();
+        if (!await authReady) throw new Error(authProblem);
+      }
       return auth;
     }
 
@@ -2725,7 +2736,7 @@
 
     document.getElementById("send-signin-code").addEventListener("click", () => runBusy(document.getElementById("send-signin-code"), async () => {
       errorEl.textContent = "";
-      try { await requireAuth(); } catch (_err) { errorEl.textContent = "Sign-in is not available."; return; }
+      try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
       const phoneNumber = document.getElementById("signin-phone").value.trim();
       const verifier = resetRecaptcha("signin-recaptcha");
       try {
@@ -2862,7 +2873,7 @@
       errorEl.textContent = "";
       const email = document.getElementById("email").value.trim();
       if (!email) return;
-      try { await requireAuth(); } catch (_err) { errorEl.textContent = "Sign-in is not available."; return; }
+      try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
       const start = await fetch("/api/email-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2923,7 +2934,7 @@
       const button = event.submitter;
       return runBusy(button, async () => {
         errorEl.textContent = "";
-        try { await requireAuth(); } catch (_err) { errorEl.textContent = "Sign-in is not available."; return; }
+        try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
         try {
           await signedIn(await signInWithEmailAndPassword(auth, document.getElementById("email").value.trim(), document.getElementById("password").value));
         } catch (err) {
@@ -2934,7 +2945,7 @@
 
     document.getElementById("google").addEventListener("click", () => runBusy(document.getElementById("google"), async () => {
       errorEl.textContent = "";
-      try { await requireAuth(); } catch (_err) { errorEl.textContent = "Sign-in is not available."; return; }
+      try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
       try {
         const provider = new GoogleAuthProvider();
         provider.setCustomParameters({ prompt: "select_account" });
