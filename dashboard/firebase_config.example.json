@@ -1,5 +1,5 @@
 {
-  "apiKey": "AIzaSyBhDgKgQX25ERRpVDfgY-LQYCfUSlHk-dE",
-  "authDomain": "mtl-nairobi.firebaseapp.com",
-  "projectId": "mtl-nairobi"
+  "apiKey": "YOUR_FIREBASE_WEB_API_KEY",
+  "authDomain": "YOUR_FIREBASE_PROJECT_ID.firebaseapp.com",
+  "projectId": "YOUR_FIREBASE_PROJECT_ID"
 }
