@@ -408,6 +408,147 @@ def test_parcel_rows_carry_the_class_probability_vector():
     assert all("attribution" in feat for feat in rows[0]["features"])
 
 
+def test_planner_explanation_translates_relative_inputs_and_explains_policy_confidence():
+    from src.dashboard.planner_explanation import planner_explanation
+
+    parcel = {
+        "action": "flood_resilient_upgrade", "flood_proba": .8, "confidence": .48,
+        "deprivation_class": "medium", "class_probability": .4,
+        "class_probabilities": [{"name": name, "value": p} for name, p in
+                                zip(("low", "medium", "high"), (.2, .4, .4))],
+        "features": [
+            {"name": "dist_to_water_m", "label": "Water", "value": .711, "attribution": .14},
+            {"name": "dist_to_road_m", "label": "Road", "value": -1.019, "attribution": -.2, "attribution_is_model": True},
+            {"name": "roof_material_score", "label": "Roof", "value": 0.0},
+        ],
+    }
+    report = planner_explanation(parcel)
+    assert report["features"][0]["comparison"] == "Farther than average"
+    assert "0.71 standard deviations above" in report["features"][0]["scale"]
+    assert report["features"][0]["condition"] == "unfavorable"
+    assert report["features"][1]["comparison"] == "Closer than average"
+    assert report["features"][1]["condition"] == "favorable"
+    assert report["features"][2]["comparison"] == "At the graph average"
+    assert report["features"][2]["condition"] == "neutral"
+    assert report["has_model_signals"]
+    assert [feature["name"] for feature in report["signals"]] == ["dist_to_road_m"]
+    assert "Weighed against" in report["signals"][0]["signal"]
+    assert "80.0% support for high flood" in report["confidence"]
+    assert "60.0% for low plus medium" in report["confidence"]
+    assert "48.0%" in report["confidence"]
+
+    parcel["confidence"] = .6
+    report = planner_explanation(parcel, reference_zone=True, majority_gate=True)
+    assert "100.0% support for high flood" in report["confidence"]
+    assert "reference-zone rule" in report["confidence"]
+    assert "in-place upgrade" in report["gate"]
+    assert "saved inputs do not support" in planner_explanation(parcel)["confidence"]
+
+    parcel["features"][1]["attribution_is_model"] = False
+    report = planner_explanation(parcel)
+    assert not report["has_model_signals"]
+    assert "Screening indicators" in report["signal_note"]
+
+
+def test_parcel_report_download_requires_verified_session_and_returns_pdf():
+    records = _records()
+    records["features"] = np.ones((2, 5))
+    records["attributions"] = np.array([[0.1, -0.4, 0.2, 0.0, np.nan]])
+    report_rows = parcel_rows(records)
+    assert report_rows[0]["features"][1]["attribution_is_model"] is True
+    assert report_rows[0]["features"][4]["attribution_is_model"] is False
+    assert not any(feature["attribution_is_model"] for feature in report_rows[1]["features"])
+
+    def verifier(token):
+        if token == "mfa":
+            return {"firebase": {"sign_in_second_factor": "totp"}}
+        raise ValueError("Missing verification.")
+
+    with serve(records, port=0, verifier=verifier, web_config={}) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        root = f"http://127.0.0.1:{server.server_port}"
+        url = root + "/api/parcel/0/report.pdf"
+        headers = {"Authorization": "Bearer mfa"}
+        try:
+            with pytest.raises(HTTPError) as rejected:
+                urlopen(url, timeout=5)
+            assert rejected.value.code == 401
+            with pytest.raises(HTTPError) as absent:
+                urlopen(Request(root + "/api/parcel/99/report.pdf", headers=headers), timeout=5)
+            assert absent.value.code == 404
+            with urlopen(Request(url, headers=headers), timeout=10) as response:
+                assert response.headers.get_content_type() == "application/pdf"
+                assert response.headers["Content-Disposition"] == 'attachment; filename="KB-00001-xai-report.pdf"'
+                assert response.headers["Cache-Control"] == "no-store"
+                pdf = response.read()
+            assert pdf.startswith(b"%PDF-")
+            assert b"Parcel planning report - KB-00001" in pdf
+            with urlopen(Request(root + "/api/parcel/0", headers=headers), timeout=5) as response:
+                detail = json.load(response)
+                assert detail["id"] == "KB-00001"
+                assert len(detail["planning"]["features"]) == 5
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def test_parcel_attention_centres_the_satellite_and_gradcam_crop(tmp_path, monkeypatch):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from src import config
+    from src.dashboard import parcel_attention
+    from src.models.dataset import DEFAULT_LAYOUT
+
+    path = tmp_path / "kibera_raster_stack.tif"
+    height = width = 96
+    bands = len(DEFAULT_LAYOUT.band_names)
+    raster = np.broadcast_to(np.linspace(0, 1, width, dtype=np.float32), (bands, height, width))
+    with rasterio.open(path, "w", driver="GTiff", width=width, height=height, count=bands, dtype="float32",
+                       crs="EPSG:4326", transform=from_origin(36.8, -1.2, .001, .001)) as dataset:
+        dataset.write(raster)
+    torch.save({}, tmp_path / "attention_unet_best.pt")
+
+    class ExampleFloodHead:
+        def __init__(self, *, layout, device):
+            assert layout == DEFAULT_LAYOUT and device == "cpu"
+            self.network = self
+
+        def load_state_dict(self, weights):
+            assert weights == {}
+
+        def explain(self, inputs):
+            assert tuple(inputs.shape) == (DEFAULT_LAYOUT.in_channels, config.TILE_SIZE_PX, config.TILE_SIZE_PX)
+            assert 0 <= inputs.min() <= inputs.max() <= 1
+            overlay = np.zeros(inputs.shape[-2:])
+            overlay[config.TILE_SIZE_PX // 2, config.TILE_SIZE_PX // 2] = 1
+            return overlay
+
+    monkeypatch.setattr(parcel_attention, "AttentionUNetModel", ExampleFloodHead)
+    parcel = {"settlement": "kibera", "lon": 36.8485, "lat": -1.2485}
+    attention = parcel_attention.load_parcel_attention(parcel, tmp_path)
+    assert attention.rgb.shape == (64, 64, 3)
+    assert attention.marker == (32, 32)
+    assert attention.heat[attention.marker] == 1
+    assert parcel_attention.load_parcel_attention({**parcel, "lon": 10}, tmp_path) is None
+
+    (tmp_path / "attention_unet_best.pt").unlink()
+    attention = parcel_attention.load_parcel_attention(parcel, tmp_path)
+    assert attention.rgb.shape == (64, 64, 3)
+    assert attention.heat is None
+
+
+def test_password_and_phone_code_fields_start_masked_and_sms_entries_start_locked():
+    html = render_shell({}, ["kibera"])
+    assert 'id="export-xai-pdf"' in html
+    for field in ("password", "signin-code", "otp", "enroll-code", "phone-change-code"):
+        assert f'id="{field}" type="password"' in html
+        assert f'data-visibility-for="{field}"' in html
+        if field != "password":
+            assert f'id="{field}-entry" hidden disabled' in html
+
+
 def test_email_codes_bind_access_to_the_verified_session(monkeypatch):
     sent = {}
     monkeypatch.setattr("src.dashboard.app.send_login_email", lambda email, code: sent.update({email: code}))

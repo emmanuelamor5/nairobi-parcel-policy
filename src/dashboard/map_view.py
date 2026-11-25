@@ -197,7 +197,14 @@ def parcel_rows(records: dict, settlement: str = None) -> list:
             for j in range(features.shape[1]):
                 fname = feature_names[j] if j < len(feature_names) else str(j)
                 fval = float(features[i, j])
-                if attributions is not None and attributions.ndim == 2 and i < attributions.shape[0] and j < attributions.shape[1]:
+                has_model_attribution = (
+                    attributions is not None
+                    and attributions.ndim == 2
+                    and i < attributions.shape[0]
+                    and j < attributions.shape[1]
+                    and np.isfinite(attributions[i, j])
+                )
+                if has_model_attribution:
                     attr = float(attributions[i, j])
                 else:
                     base_val = float(feature_baseline[j]) if feature_baseline is not None and j < len(feature_baseline) else 0.0
@@ -213,6 +220,7 @@ def parcel_rows(records: dict, settlement: str = None) -> list:
                         "label": FEATURE_LABELS.get(fname, fname),
                         "value": fval,
                         "attribution": attr,
+                        "attribution_is_model": bool(has_model_attribution),
                     }
                 )
             row["features"] = feat_items

@@ -21,6 +21,7 @@ shap>=0.45.0
 
 # Dashboard (Sprint 6)
 folium>=0.16.0
+matplotlib>=3.8
 
 # Dev / testing
 pytest>=8.0.0

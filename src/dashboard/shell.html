@@ -46,6 +46,16 @@
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
+    .private-field { position: relative; }
+    .private-field input { width: 100%; padding-right: 64px !important; }
+    .private-toggle {
+      position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+      border: 0; border-radius: 6px; padding: 6px; background: transparent;
+      color: inherit; font: inherit; font-size: .85rem; font-weight: 700; cursor: pointer;
+    }
+    .private-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+    fieldset.code-entry { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
+
     body { margin: 0; font-family: Inter, "Segoe UI", sans-serif; color: var(--ink); background: var(--paper); }
     button, input { font: inherit; color: inherit; }
     img { display: block; }
@@ -205,6 +215,12 @@
     .tool { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: white; color: #0f172a; cursor: pointer; font-size: 12px; font-weight: 500; }
     .tool.square { width: 36px; padding: 0; }
     .tool:hover:not(:disabled) { background: #e8eef3; color: #0f172a; }
+    .export-button { cursor: pointer; transition: transform .15s, box-shadow .15s, background .15s; }
+    .export-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 9px #10213533; }
+    .export-button:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 1px 3px #10213533; }
+    .export-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+    .export-button[aria-busy="true"] { cursor: progress; }
+    @media (prefers-reduced-motion: reduce) { .export-button { transition: none; } }
     .tool[aria-pressed="true"] { background: var(--nav); color: #ffffff; border-color: var(--nav); }
     .tool[aria-pressed="true"]:hover { background: #272c30; color: #ffffff; }
     .primary:hover:not(:disabled) { color: #ffffff; filter: brightness(1.12); }
@@ -491,8 +507,16 @@
     .mini-track i.neg { background: var(--neg); }
     .shap-key { display: flex; gap: 14px; margin-top: 8px; color: var(--muted); font-size: 10px; }
     .shap-key i { width: 7px; height: 7px; border-radius: 1px; display: inline-block; margin-right: 5px; }
-    .shap-key .pos { background: var(--pos); }
-    .shap-key .neg { background: var(--neg); }
+    .shap-key { flex-wrap: wrap; }
+    [data-condition="favorable"] { --indicator: #08754c; --indicator-soft: #d8f4e6; }
+    [data-condition="unfavorable"] { --indicator: #bd2048; --indicator-soft: #fbe3ea; }
+    [data-condition="neutral"] { --indicator: #56677b; --indicator-soft: #e8edf3; }
+    html[data-theme="dark"] [data-condition="favorable"] { --indicator: #70e8a8; --indicator-soft: #123a31; }
+    html[data-theme="dark"] [data-condition="unfavorable"] { --indicator: #ffa0b2; --indicator-soft: #472034; }
+    html[data-theme="dark"] [data-condition="neutral"] { --indicator: #bcc9d9; --indicator-soft: #293548; }
+    .shap-key [data-condition], .bar-row[data-condition] .plot i { background: var(--indicator); }
+    .bar-row[data-condition] b { color: var(--indicator); background: var(--indicator-soft); }
+    .shap-insight[data-condition] { border-left-color: var(--indicator); }
     .xai-open { width: 100%; margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; }
     .xai { display: none; flex: 1; flex-direction: column; min-height: 0; }
     .xai.on { display: flex; }
@@ -519,7 +543,7 @@
     .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
     .shap-insight {
       margin-top: 14px; padding: 12px 14px; border-radius: 8px;
-      background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--pos);
+      background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--muted);
       font-size: 12px; line-height: 1.5; color: var(--ink);
     }
     .dir-labels { display: flex; justify-content: space-between; margin: 14px 0 8px 228px; color: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -692,7 +716,10 @@
           <button class="auth-pill auth-dark" id="email-link-send" type="button" disabled>Email me a sign-in link</button>
           <div id="password-step" class="auth-stack" hidden>
             <label class="sr-only" for="password">Password</label>
-            <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+            <div class="private-field">
+              <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+              <button type="button" class="private-toggle" data-visibility-for="password" aria-controls="password" aria-label="Show password">Show</button>
+            </div>
             <button class="auth-pill auth-dark" type="submit">Sign in</button>
           </div>
           <button class="auth-pill auth-continue" id="email-continue" type="button" disabled>Use a password instead</button>
@@ -717,17 +744,27 @@
         <input id="signin-phone" type="tel" autocomplete="tel" placeholder="+16505553434">
         <div id="signin-recaptcha"></div>
         <button class="auth-pill" id="send-signin-code" type="button">Send code</button>
-        <label for="signin-code">Text message code</label>
-        <input id="signin-code" type="text" inputmode="numeric" autocomplete="one-time-code">
-        <button class="auth-pill auth-dark" type="submit">Sign in with phone</button>
+        <fieldset class="code-entry" id="signin-code-entry" hidden disabled>
+          <label for="signin-code">Text message code</label>
+          <div class="private-field">
+            <input id="signin-code" type="password" inputmode="numeric" autocomplete="one-time-code">
+            <button type="button" class="private-toggle" data-visibility-for="signin-code" aria-controls="signin-code" aria-label="Show code">Show</button>
+          </div>
+          <button class="auth-pill auth-dark" type="submit">Sign in with phone</button>
+        </fieldset>
       </form>
       <form id="challenge" class="auth-stack" hidden>
         <button class="auth-back" id="challenge-back" type="button">All sign-in options</button>
         <p id="challenge-copy">Enter the code from the text message.</p>
         <div id="challenge-recaptcha"></div>
-        <label for="otp">Text message code</label>
-        <input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" required>
-        <button class="auth-pill auth-dark" type="submit">Verify code</button>
+        <fieldset class="code-entry" id="otp-entry" hidden disabled>
+          <label for="otp">Text message code</label>
+          <div class="private-field">
+            <input id="otp" type="password" inputmode="numeric" autocomplete="one-time-code" required>
+            <button type="button" class="private-toggle" data-visibility-for="otp" aria-controls="otp" aria-label="Show code">Show</button>
+          </div>
+          <button class="auth-pill auth-dark" type="submit">Verify code</button>
+        </fieldset>
       </form>
       <form id="enroll" class="auth-stack" hidden>
         <button class="auth-back" id="enroll-back" type="button">All sign-in options</button>
@@ -736,9 +773,14 @@
         <input id="phone" type="tel" autocomplete="tel" placeholder="+254712345678" required>
         <div id="enroll-recaptcha"></div>
         <button class="auth-pill" id="send-enroll" type="button">Send code</button>
-        <label for="enroll-code">Text message code</label>
-        <input id="enroll-code" type="text" inputmode="numeric" autocomplete="one-time-code">
-        <button class="auth-pill auth-dark" type="submit">Verify and enroll</button>
+        <fieldset class="code-entry" id="enroll-code-entry" hidden disabled>
+          <label for="enroll-code">Text message code</label>
+          <div class="private-field">
+            <input id="enroll-code" type="password" inputmode="numeric" autocomplete="one-time-code">
+            <button type="button" class="private-toggle" data-visibility-for="enroll-code" aria-controls="enroll-code" aria-label="Show code">Show</button>
+          </div>
+          <button class="auth-pill auth-dark" type="submit">Verify and enroll</button>
+        </fieldset>
       </form>
       <form id="code-choice" class="auth-stack" hidden>
         <button class="auth-back" id="code-back" type="button">All sign-in options</button>
@@ -751,7 +793,10 @@
           <p id="code-destination"></p>
           <p id="code-timer">5:00</p>
           <label for="login-code">Verification code</label>
-          <input id="login-code" type="text" inputmode="numeric" autocomplete="one-time-code">
+          <div class="private-field">
+            <input id="login-code" type="password" inputmode="numeric" autocomplete="one-time-code">
+            <button type="button" class="private-toggle" data-visibility-for="login-code" aria-controls="login-code" aria-label="Show code">Show</button>
+          </div>
           <button class="auth-pill auth-dark" id="confirm-login-code" type="button">Continue</button>
           <button class="auth-pill" id="resend-login-code" type="button">Send a new code</button>
         </div>
@@ -853,9 +898,9 @@
             <button class="tool square" id="bell" type="button" aria-label="Notices" aria-expanded="false">
               <img src="/assets/bell.svg" alt="">
             </button>
-            <button class="tool" id="export-map" type="button">
+            <button class="tool export-button" id="export-map" type="button">
               <img src="/assets/download.svg" alt="">
-              Export
+              <span>Export</span>
             </button>
             <div class="notice" id="notice" hidden>
               <p id="banner"></p>
@@ -941,7 +986,7 @@
                 <p class="heat-note" id="card-cam">Satellite image centred on this parcel. The marker sits on the building centroid. A stored Grad-CAM chip is not kept per building.</p>
               </div>
               <div class="mini-shap">
-                <p class="section-title">Top SHAP feature contributors</p>
+                <p class="section-title">Top feature indicators</p>
                 <div id="card-shap"></div>
               </div>
               <button class="primary xai-open" id="open-xai" type="button">View full XAI summary <img src="/assets/arrow-right.svg" alt=""></button>
@@ -961,7 +1006,8 @@
             <button class="tool" id="xai-next" type="button" aria-label="Next parcel">Next ›</button>
             <button class="tool" id="quick-theme-xai" type="button" aria-label="Toggle dark mode">Dark mode</button>
             <button class="tool" id="back-map" type="button"><img src="/assets/arrow-left.svg" alt=""> Back to Map</button>
-            <button class="tool" id="export-xai" type="button"><img src="/assets/download.svg" alt=""> Export</button>
+            <button class="tool export-button" id="export-xai" type="button"><img src="/assets/download.svg" alt=""><span>Export JSON</span></button>
+            <button class="tool export-button" id="export-xai-pdf" type="button"><img src="/assets/download.svg" alt=""><span>Export PDF</span></button>
           </div>
         </header>
         <div class="xai-body">
@@ -999,10 +1045,14 @@
                 </div>
                 <div class="stat-badge">GraphSAGE 5-feature node head</div>
               </div>
-              <div class="shap-insight" id="shap-insight">Select a feature row below to inspect how it shifts the parcel's deprivation severity.</div>
-              <div class="dir-labels"><span>← Reduces severity (−)</span><span>Increases severity (+) →</span></div>
+              <div class="shap-insight" id="shap-insight">Select a feature row below to inspect its score.</div>
+              <div class="dir-labels" id="shap-directions"><span>Weighs against the predicted class (-)</span><span>Supports the predicted class (+)</span></div>
               <div id="shap-bars"></div>
-              <div class="shap-key"><span><i class="pos"></i>Pushes severity higher (+)</span><span><i class="neg"></i>Reduces severity (−)</span></div>
+              <div class="shap-key" id="shap-key" aria-label="Indicator condition relative to the settlement graph average">
+                <span><i data-condition="favorable"></i>More favorable</span>
+                <span><i data-condition="unfavorable"></i>Less favorable</span>
+                <span><i data-condition="neutral"></i>At average or unknown</span>
+              </div>
               <div class="divider"></div>
               <p class="section-title">Deprivation severity · class probability vector</p>
               <div class="class-box">
@@ -1051,7 +1101,7 @@
                 <div class="path" id="path"></div>
                 <div class="path-note">
                   <strong>Reference prediction path</strong>
-                  <p>Selected reference steps are shown. They are not an additive reconciliation of the SHAP contributions.</p>
+                  <p>Indicator scores cannot be added to obtain policy confidence. The PDF report explains the confidence calculation.</p>
                 </div>
               </div>
               <div class="matrix-box">
@@ -1261,7 +1311,7 @@
               <div class="admin-output" id="out-generate_folium_outputs">Generates standalone Folium HTML and policy-counts.json for planners.</div>
               <div class="admin-controls">
                 <button class="primary" type="button" data-run-uc="generate_folium_outputs">Generate Folium Outputs</button>
-                <button class="tool" id="admin-download-folium" type="button">Download Folium HTML</button>
+                <button class="tool export-button" id="admin-download-folium" type="button"><span>Download Folium HTML</span></button>
               </div>
             </section>
             <section class="panel admin-card" data-admin-uc="manage_versions">
@@ -1422,10 +1472,15 @@
               <button class="auth-pill compact" id="send-phone-change" type="button">Send code</button>
             </div>
             <div id="phone-change-recaptcha"></div>
-            <label for="phone-change-code">Text message code</label>
-            <input id="phone-change-code" type="text" inputmode="numeric" autocomplete="one-time-code">
             <p class="error" id="profile-error" role="alert"></p>
-            <button class="auth-pill auth-dark" id="confirm-phone-change" type="button">Update phone number</button>
+            <fieldset class="code-entry" id="phone-change-code-entry" hidden disabled>
+              <label for="phone-change-code">Text message code</label>
+              <div class="private-field">
+                <input id="phone-change-code" type="password" inputmode="numeric" autocomplete="one-time-code">
+                <button type="button" class="private-toggle" data-visibility-for="phone-change-code" aria-controls="phone-change-code" aria-label="Show code">Show</button>
+              </div>
+              <button class="auth-pill auth-dark" id="confirm-phone-change" type="button">Update phone number</button>
+            </fieldset>
           </section>
         </div>
       </div>
@@ -1435,6 +1490,7 @@
       </footer>
     </div>
   </div>
+  <p id="export-status" class="sr-only" role="status"></p>
   <script src="/vendor/leaflet.js"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
@@ -1486,7 +1542,8 @@
     let authProblem = "";
     let resolver = null;
     let confirmationResult = null;
-    let verificationId = null;
+    let challengeVerificationId = null;
+    let enrollmentVerificationId = null;
     let phoneChangeId = null;
     let signedInUser = null;
     let pendingUser = null;
@@ -2158,6 +2215,7 @@
       probe.src = url;
     }
 
+
     function zBand(z) {
       const v = Number(z);
       if (!Number.isFinite(v)) return "Standardized";
@@ -2177,9 +2235,7 @@
         cell.textContent = h;
         grid.append(cell);
       }
-      const floodHigh = detail.flood_proba != null
-        ? Number(detail.flood_proba) >= 0.5
-        : (detail.action === "flood_resilient_upgrade" || detail.action === "compensated_resettlement");
+      const floodHigh = detail.action === "flood_resilient_upgrade" || detail.action === "compensated_resettlement";
       const depCol = detail.deprivation_class === "high" ? 2 : (detail.deprivation_class === "medium" ? 1 : 0);
       const matrixRows = [
         { label: "Flood Low (<0.50)", cells: ["retain_formalise", "retain_upgrade", "in_situ_upgrade_priority"], high: false },
@@ -2192,9 +2248,9 @@
         grid.append(rowHead);
         row.cells.forEach((cellAction, idx) => {
           const box = document.createElement("div");
-          const isMatch = row.high === floodHigh && idx === depCol;
+          const isMatch = Boolean(detail.deprivation_class) && detail.action !== "insufficient_evidence" && row.high === floodHigh && idx === depCol;
           box.className = "matrix-cell" + (isMatch ? " is-current" : "");
-          box.textContent = actionName(cellAction);
+          box.textContent = actionName(isMatch ? detail.action : cellAction);
           grid.append(box);
         });
       }
@@ -2219,14 +2275,16 @@
 
     function renderExplanations(detail) {
       const rawFeatures = detail.features || [];
-      const classSign = detail.deprivation_class === "low" ? -1 : 1;
-      const features = rawFeatures.map((feature) => {
-        if (feature.attribution != null) return feature;
-        const dir = feature.name === "area_m2" ? -1 : 1;
-        return Object.assign({}, feature, {
-          attribution: Number(feature.value || 0) * dir * classSign / Math.max(rawFeatures.length, 1),
-        });
-      });
+      const features = rawFeatures;
+      const conditions = new Map((detail.planning?.features || []).map(({ name, condition }) => [name, condition]));
+      const conditionLabels = {
+        favorable: "More favorable than average",
+        unfavorable: "Less favorable than average",
+        neutral: "At average or unknown",
+      };
+      const recorded = features.some((feature) => feature.attribution_is_model);
+      document.getElementById("shap-directions").hidden = !recorded;
+
       const bars = document.getElementById("shap-bars");
       const mini = document.getElementById("card-shap");
       const values = document.getElementById("feature-values");
@@ -2236,11 +2294,12 @@
       mini.replaceChildren();
       values.replaceChildren();
       path.replaceChildren();
-      document.getElementById("shap-title").textContent = features.length >= 5 ? "Top 5 SHAP feature contributors" : "SHAP feature contributors";
+      delete insight.dataset.condition;
+      document.getElementById("shap-title").textContent = recorded ? "SHAP feature contributors" : "Feature indicators for review";
       if (!features.length) {
         bars.textContent = "Feature values are on the settlement graph. Join data.pos and data.x before starting the server.";
         mini.textContent = bars.textContent;
-        if (insight) insight.textContent = "Join the settlement graph features to inspect per-indicator SHAP contributions.";
+        if (insight) insight.textContent = "No building feature scores are available for this parcel.";
       }
       const valueRowsByKey = {};
       for (const feature of features) {
@@ -2260,15 +2319,16 @@
         values.append(row);
         valueRowsByKey[feature.name || feature.label] = row;
       }
-      const ranked = features.filter((feature) => feature.attribution != null)
+      const ranked = features.filter((feature) => Number.isFinite(feature.attribution) && feature.attribution_is_model === recorded)
         .slice()
         .sort((a, b) => Math.abs(b.attribution) - Math.abs(a.attribution));
       const maxAbs = Math.max(0.01, ...ranked.map((feature) => Math.abs(feature.attribution)));
+      const displayWeight = (feature) => recorded ? signed(feature.attribution) : Math.abs(feature.attribution).toFixed(2);
       let pathStarted = false;
       if (features.length && !ranked.length) {
         const note = document.createElement("p");
         note.className = "class-note";
-        note.textContent = "Local Shapley values are not on this parcel record.";
+        note.textContent = "Individual feature scores are unavailable for this parcel.";
         bars.append(note);
         mini.append(note.cloneNode(true));
       }
@@ -2280,8 +2340,11 @@
         for (const [k, r] of Object.entries(valueRowsByKey)) r.classList.toggle("is-active", k === key);
         for (const [k, s] of Object.entries(stepNodesByKey)) s.classList.toggle("is-active", k === key);
         if (insight) {
-          const directionText = feature.attribution >= 0 ? "increases predicted severity by " : "reduces predicted severity by ";
-          insight.textContent = "#" + (rankIdx + 1) + " driver — " + feature.label + " (z = " + Number(feature.value).toFixed(2) + ") " + directionText + signed(feature.attribution) + ".";
+          const score = recorded ? "model score " + signed(feature.attribution) : "screening score " + Math.abs(feature.attribution).toFixed(2);
+          const condition = conditions.get(key) || "neutral";
+          insight.dataset.condition = condition;
+          insight.textContent = "#" + (rankIdx + 1) + ": " + feature.label + " (z = " + Number(feature.value).toFixed(2) + "), " + score + ". " + conditionLabels[condition] + ".";
+          if (!recorded) insight.textContent += " See the PDF report for the planner explanation.";
         }
       }
       ranked.forEach((feature, rankIdx) => {
@@ -2289,6 +2352,9 @@
         const line = document.createElement("div");
         line.className = "bar-row";
         line.dataset.key = key;
+        const condition = conditions.get(key) || "neutral";
+        line.dataset.condition = condition;
+        line.title = conditionLabels[condition];
         const meta = document.createElement("div");
         meta.className = "feat-meta";
         const rank = document.createElement("span");
@@ -2303,18 +2369,18 @@
         const zero = document.createElement("span");
         zero.className = "zero";
         const fill = document.createElement("i");
-        const width = Math.max(3, Math.abs(feature.attribution) / maxAbs * 50);
+        const width = Math.abs(feature.attribution) / maxAbs * (recorded ? 50 : 100);
         fill.style.width = width + "%";
-        if (feature.attribution < 0) {
+        if (recorded && feature.attribution < 0) {
           fill.className = "neg";
           fill.style.right = "50%";
         } else {
-          fill.style.left = "50%";
+          fill.style.left = recorded ? "50%" : "0";
         }
-        plot.append(zero, fill);
+        if (recorded) plot.append(zero);
+        plot.append(fill);
         const number = document.createElement("b");
-        if (feature.attribution < 0) number.className = "neg";
-        number.textContent = signed(feature.attribution);
+        number.textContent = displayWeight(feature);
         line.append(meta, plot, number);
         line.addEventListener("click", () => focusFeature(feature, rankIdx));
         line.addEventListener("mouseenter", () => focusFeature(feature, rankIdx));
@@ -2329,18 +2395,18 @@
         track.className = "mini-track";
         const compactFill = document.createElement("i");
         compactFill.style.width = Math.round(Math.abs(feature.attribution) / maxAbs * 100) + "%";
-        if (feature.attribution < 0) compactFill.className = "neg";
+        if (recorded && feature.attribution < 0) compactFill.className = "neg";
         track.append(compactFill);
         const compactValue = document.createElement("b");
-        compactValue.textContent = signed(feature.attribution);
+        compactValue.textContent = displayWeight(feature);
         compact.append(compactLabel, track, compactValue);
         mini.append(compact);
 
         const step = document.createElement("div");
         step.className = "step";
         const valueBox = document.createElement("div");
-        valueBox.className = "step-value " + (feature.attribution < 0 ? "neg" : "pos");
-        valueBox.textContent = signed(feature.attribution);
+        valueBox.className = "step-value " + (recorded && feature.attribution < 0 ? "neg" : "pos");
+        valueBox.textContent = displayWeight(feature);
         const caption = document.createElement("em");
         caption.textContent = feature.label;
         const top = document.createElement("div");
@@ -2627,6 +2693,28 @@
       drawLegend();
     }
 
+    function setFieldVisibility(input, button, revealed) {
+      const label = input.id === "password" ? "password" : "code";
+      input.type = revealed ? "text" : "password";
+      button.textContent = revealed ? "Hide" : "Show";
+      button.setAttribute("aria-label", button.textContent + " " + label);
+    }
+
+    for (const button of document.querySelectorAll("[data-visibility-for]")) {
+      const input = document.getElementById(button.dataset.visibilityFor);
+      button.addEventListener("click", () => setFieldVisibility(input, button, input.type === "password"));
+    }
+
+    function setCodeEntry(inputId, ready) {
+      const entry = document.getElementById(inputId + "-entry");
+      const input = document.getElementById(inputId);
+      entry.hidden = !ready;
+      entry.disabled = !ready;
+      input.value = "";
+      setFieldVisibility(input, entry.querySelector("[data-visibility-for]"), false);
+      if (ready) input.focus();
+    }
+
     function resetRecaptcha(containerId) {
       if (recaptcha) {
         try { recaptcha.clear(); } catch (err) { /* a fresh widget replaces it */ }
@@ -2652,25 +2740,35 @@
       }
     }
 
+    async function sendSms(containerId, send) {
+      const verifier = resetRecaptcha(containerId);
+      try {
+        await verifier.verify();
+        return await send(verifier);
+      } finally {
+        if (recaptcha === verifier) hideRecaptcha(containerId);
+      }
+    }
+
     async function beginChallenge(err) {
       resolver = getMultiFactorResolver(auth, err);
       const phoneHint = resolver.hints.find((item) => item.factorId === PhoneMultiFactorGenerator.FACTOR_ID);
       showForm("challenge");
+      challengeVerificationId = null;
+      setCodeEntry("otp", false);
       if (phoneHint) {
         challengeKind = "phone";
         const shownPhone = phoneHint.phoneNumber || "your phone";
-        document.getElementById("challenge-copy").textContent = "Sending a code to " + shownPhone + ".";
-        const verifier = resetRecaptcha("challenge-recaptcha");
-        verificationId = await new PhoneAuthProvider(auth).verifyPhoneNumber(
-          { multiFactorHint: phoneHint, session: resolver.session },
-          verifier,
-        );
-        hideRecaptcha("challenge-recaptcha");
+        document.getElementById("challenge-copy").textContent = "Complete reCAPTCHA to text a code to " + shownPhone + ".";
+        challengeVerificationId = await sendSms("challenge-recaptcha", (verifier) =>
+          new PhoneAuthProvider(auth).verifyPhoneNumber({ multiFactorHint: phoneHint, session: resolver.session }, verifier));
         document.getElementById("challenge-copy").textContent = "Enter the code texted to " + shownPhone + ".";
+        setCodeEntry("otp", true);
         return;
       }
       challengeKind = "totp";
       document.getElementById("challenge-copy").textContent = "Enter the code from your authenticator app.";
+      setCodeEntry("otp", true);
     }
 
     function initials(source) {
@@ -2738,14 +2836,18 @@
       errorEl.textContent = "";
       try { await requireAuth(); } catch (err) { errorEl.textContent = publicAuthError(err); return; }
       const phoneNumber = document.getElementById("signin-phone").value.trim();
-      const verifier = resetRecaptcha("signin-recaptcha");
+      confirmationResult = null;
+      setCodeEntry("signin-code", false);
+      if (!phoneNumber) {
+        errorEl.textContent = "Enter your phone number first.";
+        return;
+      }
       try {
-        confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, verifier);
-        hideRecaptcha("signin-recaptcha");
+        confirmationResult = await sendSms("signin-recaptcha", (verifier) => signInWithPhoneNumber(auth, phoneNumber, verifier));
         errorEl.textContent = "Code sent. Enter it below.";
+        setCodeEntry("signin-code", true);
       } catch (err) {
         errorEl.textContent = publicAuthError(err);
-        try { verifier.clear(); } catch (ignore) { /* let the next attempt render a new widget */ }
       }
     }));
 
@@ -2755,6 +2857,7 @@
       return runBusy(button, async () => {
         errorEl.textContent = "";
         try {
+          if (!confirmationResult) return;
           const result = await confirmationResult.confirm(document.getElementById("signin-code").value.trim());
           await enterApp(result.user);
         } catch (err) {
@@ -2977,7 +3080,8 @@
           const code = document.getElementById("otp").value.trim();
           let assertion;
           if (challengeKind === "phone") {
-            assertion = PhoneMultiFactorGenerator.assertion(PhoneAuthProvider.credential(verificationId, code));
+            if (!challengeVerificationId) return;
+            assertion = PhoneMultiFactorGenerator.assertion(PhoneAuthProvider.credential(challengeVerificationId, code));
           } else {
             const hint = resolver.hints.find((item) => item.factorId === TotpMultiFactorGenerator.FACTOR_ID) || resolver.hints[0];
             assertion = TotpMultiFactorGenerator.assertionForSignIn(hint.uid, code);
@@ -2991,14 +3095,14 @@
 
     document.getElementById("send-enroll").addEventListener("click", () => runBusy(document.getElementById("send-enroll"), async () => {
       errorEl.textContent = "";
+      enrollmentVerificationId = null;
+      setCodeEntry("enroll-code", false);
       try {
         const session = await multiFactor(auth.currentUser).getSession();
-        const verifier = resetRecaptcha("enroll-recaptcha");
-        verificationId = await new PhoneAuthProvider(auth).verifyPhoneNumber(
-          { phoneNumber: document.getElementById("phone").value.trim(), session },
-          verifier,
-        );
-        hideRecaptcha("enroll-recaptcha");
+        const phoneNumber = document.getElementById("phone").value.trim();
+        enrollmentVerificationId = await sendSms("enroll-recaptcha", (verifier) =>
+          new PhoneAuthProvider(auth).verifyPhoneNumber({ phoneNumber, session }, verifier));
+        setCodeEntry("enroll-code", true);
         errorEl.textContent = "Code sent. Enter it below.";
       } catch (err) {
         errorEl.textContent = publicAuthError(err);
@@ -3010,7 +3114,8 @@
       return runBusy(event.submitter, async () => {
         errorEl.textContent = "";
         try {
-          const credential = PhoneAuthProvider.credential(verificationId, document.getElementById("enroll-code").value.trim());
+          if (!enrollmentVerificationId) return;
+          const credential = PhoneAuthProvider.credential(enrollmentVerificationId, document.getElementById("enroll-code").value.trim());
           await multiFactor(auth.currentUser).enroll(PhoneMultiFactorGenerator.assertion(credential), "Phone");
           await signOut(auth);
           showForm("sign-in");
@@ -3093,11 +3198,7 @@
         await runAdminUseCase(uc, null);
       }
     }));
-    document.getElementById("admin-download-folium").addEventListener("click", () => {
-      const s = document.getElementById("admin-export-settlement").value;
-      const query = s && s !== "all" ? "?settlement=" + encodeURIComponent(s) : "";
-      download("/api/map" + query, "folium-policy-map" + (s && s !== "all" ? "-" + s : "") + ".html");
-    });
+
     document.getElementById("nav-settings").addEventListener("click", showSettings);
     document.getElementById("open-profile").addEventListener("click", showProfile);
     document.getElementById("analyst-initials").addEventListener("click", showProfile);
@@ -3145,14 +3246,17 @@
     document.getElementById("send-phone-change").addEventListener("click", () => runBusy(document.getElementById("send-phone-change"), async () => {
       const profileError = document.getElementById("profile-error");
       profileError.textContent = "";
+      phoneChangeId = null;
+      setCodeEntry("phone-change-code", false);
       if (!auth || !auth.currentUser) {
         profileError.textContent = "Sign in with a Firebase provider to update your phone number.";
         return;
       }
       try {
-        const verifier = resetRecaptcha("phone-change-recaptcha");
-        phoneChangeId = await new PhoneAuthProvider(auth).verifyPhoneNumber(document.getElementById("new-phone").value.trim(), verifier);
-        hideRecaptcha("phone-change-recaptcha");
+        const phoneNumber = document.getElementById("new-phone").value.trim();
+        phoneChangeId = await sendSms("phone-change-recaptcha", (verifier) =>
+          new PhoneAuthProvider(auth).verifyPhoneNumber(phoneNumber, verifier));
+        setCodeEntry("phone-change-code", true);
         profileError.textContent = "Code sent. Enter it below.";
       } catch (err) {
         profileError.textContent = publicAuthError(err);
@@ -3170,6 +3274,8 @@
         await updatePhoneNumber(auth.currentUser, credential);
         signedInUser = auth.currentUser;
         document.getElementById("current-phone").textContent = "Current number: " + auth.currentUser.phoneNumber;
+        phoneChangeId = null;
+        setCodeEntry("phone-change-code", false);
         profileError.textContent = "Phone number updated.";
       } catch (err) {
         profileError.textContent = publicAuthError(err);
@@ -3307,17 +3413,67 @@
       else document.exitFullscreen();
     });
     async function download(path, name) {
-      const headers = await tokenHeader(auth.currentUser);
+      const headers = await tokenHeader(auth?.currentUser);
       const response = await fetch(path, { headers });
-      const blob = await response.blob();
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("Sign in again to download this export.");
+      }
+      if (!response.ok) throw new Error("The export request failed.");
+      const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
+      link.href = url;
       link.download = name;
-      link.click();
+      document.body.append(link);
+      try {
+        link.click();
+      } finally {
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
     }
-    document.getElementById("export-map").addEventListener("click", () => download("/api/summary", "policy-counts.json"));
-    document.getElementById("export-xai").addEventListener("click", () => {
-      if (selected) download("/api/parcel/" + selected.index, selected.id + ".json");
+
+    function bindExport(buttonId, getFile) {
+      const button = document.getElementById(buttonId);
+      const label = button.querySelector("span");
+      const idle = label.textContent;
+      const status = document.getElementById("export-status");
+      let reset;
+      button.addEventListener("click", () => {
+        clearTimeout(reset);
+        void runBusy(button, async () => {
+          const file = getFile();
+          if (!file) {
+            label.textContent = "Select a parcel";
+            status.textContent = "Select a parcel before exporting.";
+          } else {
+            label.textContent = "Preparing...";
+            status.textContent = "Preparing " + file[1] + ".";
+            try {
+              await download(...file);
+              label.textContent = "Download started";
+              status.textContent = "Download started for " + file[1] + ".";
+            } catch (err) {
+              label.textContent = "Try again";
+              status.textContent = err.message || "The export request failed.";
+              button.title = status.textContent;
+            }
+          }
+          reset = setTimeout(() => {
+            label.textContent = idle;
+            button.removeAttribute("title");
+          }, 2500);
+        });
+      });
+    }
+
+    bindExport("export-map", () => ["/api/summary", "policy-counts.json"]);
+    bindExport("export-xai", () => selected && ["/api/parcel/" + selected.index, selected.id + ".json"]);
+    bindExport("export-xai-pdf", () => selected && ["/api/parcel/" + selected.index + "/report.pdf", selected.id + "-xai-report.pdf"]);
+    bindExport("admin-download-folium", () => {
+      const settlement = document.getElementById("admin-export-settlement").value;
+      const filtered = settlement && settlement !== "all";
+      return ["/api/map" + (filtered ? "?settlement=" + encodeURIComponent(settlement) : ""),
+              "folium-policy-map" + (filtered ? "-" + settlement : "") + ".html"];
     });
   </script>
 </body>

@@ -672,6 +672,7 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 return
             if self._claims() is None:
                 return
+            attachment = None
             settlement = parse_qs(parsed.query).get("settlement", [None])[0] or None
             if parsed.path == "/api/summary":
                 payload = json.dumps(action_counts(records["action_index"])).encode("utf-8")
@@ -683,8 +684,10 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 payload = json.dumps(brief).encode("utf-8")
                 content_type = "application/json; charset=utf-8"
             elif parsed.path.startswith("/api/parcel/"):
+                parcel_path = parsed.path.removeprefix("/api/parcel/")
+                is_pdf = parcel_path.endswith("/report.pdf")
                 try:
-                    index = int(parsed.path.rsplit("/", 1)[-1])
+                    index = int(parcel_path.removesuffix("/report.pdf"))
                 except ValueError:
                     _unauthorised(self, 404, "Unknown parcel.")
                     return
@@ -692,8 +695,28 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 if not match:
                     _unauthorised(self, 404, "Unknown parcel.")
                     return
-                payload = json.dumps(match[0]).encode("utf-8")
-                content_type = "application/json; charset=utf-8"
+                from .planner_explanation import planner_explanation
+
+                parcel = match[0]
+                flags = {
+                    name: bool(records[key][index])
+                    for name, key in (
+                        ("reference_zone", "inside_nrrp"),
+                        ("override", "override_applied"),
+                        ("majority_gate", "majority_gate_applied"),
+                    )
+                    if records.get(key) is not None
+                }
+                parcel["planning"] = planner_explanation(parcel, **flags)
+                if is_pdf:
+                    from .parcel_report import build_parcel_pdf
+
+                    payload = build_parcel_pdf(parcel, lift_note)
+                    content_type = "application/pdf"
+                    attachment = f'{parcel["id"]}-xai-report.pdf'
+                else:
+                    payload = json.dumps(parcel).encode("utf-8")
+                    content_type = "application/json; charset=utf-8"
             else:
                 fmap = build_policy_map(
                     records["positions"],
@@ -709,6 +732,8 @@ def make_handler(records: dict, web_config: dict, project_id: str, verifier=None
                 content_type = "text/html; charset=utf-8"
             self.send_response(200)
             self.send_header("Content-Type", content_type)
+            if attachment:
+                self.send_header("Content-Disposition", f'attachment; filename="{attachment}"')
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

@@ -142,6 +142,12 @@ The preview runs in a separate Python process from the current checkout.
 Restart a Colab runtime that is still running an older preview, then use
 the new HTTPS link printed by the preview cell.
 
+The XAI PDF can include a parcel-centred Grad-CAM overlay. Put the
+Sprint 4 trained `attention_unet_best.pt` and each settlement's
+`<settlement>_raster_stack.tif` in `data/drive_dashboard/gradcam/`.
+Set `DASHBOARD_GRADCAM_DIR` to use another folder. The report identifies
+when imagery or a compatible flood checkpoint is unavailable.
+
 ## Repo structure
 
 ```

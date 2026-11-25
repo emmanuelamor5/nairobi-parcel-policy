@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Nairobi Risk Mapping (localhost)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "module": "src.dashboard.app",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "args": [
+        "--table",
+        "data/drive_dashboard/policy_table.npz",
+        "--graphs",
+        "data/drive_dashboard/graphs",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8765"
+      ]
+    }
+  ]
+}
