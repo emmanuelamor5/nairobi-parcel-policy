@@ -1,4 +1,4 @@
-# Multi-Task Deep Learning for Just Urban Governance
+# Parcel-Level Flood Risk and Structural Deprivation Assessment in Nairobi's Informal Settlements Using a Multi-Task Deep Learning System
 
 Parcel-level flood risk micro-zonation and structural deprivation
 assessment for Nairobi's informal settlements (Kibera, Mathare, Mukuru),
@@ -6,8 +6,7 @@ combining an Attention U-Net (flood hazard) and GraphSAGE (structural
 deprivation) through a late-fusion policy decision engine, surfaced via an
 explainable-AI Folium dashboard.
 
-Strathmore University, School of Computing and Engineering Sciences —
-ICS Project II. Full methodology in the project proposal.
+
 
 ## Status
 
